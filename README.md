@@ -86,7 +86,7 @@ parallel work, or raise the VM's allocation.
 ## Install
 
 ```powershell
-git clone https://github.com/<you>/airlock.git
+git clone https://github.com/Shubh18s/airlock.git
 cd airlock
 .\install.ps1
 ```
