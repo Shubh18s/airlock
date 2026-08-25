@@ -1,0 +1,14 @@
+# Per-project egress allowlist, on top of the built-in minimum in
+# image/init-firewall.sh (api.anthropic.com, statsig.anthropic.com,
+# registry.npmjs.org, pypi.org, files.pythonhosted.org).
+#
+# Only used when you run the firewall -- it needs --cap-add=NET_ADMIN, which the
+# default --cap-drop=ALL removes. Off by default; see README.
+#
+# Every line here is attack surface you are choosing to accept. Keep it short.
+
+github.com
+api.github.com
+codeload.github.com       # where git clone and tarball fetches actually land
+
+# download.pytorch.org    # uncomment for projects pinning a CUDA torch index

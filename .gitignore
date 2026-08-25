@@ -1,0 +1,9 @@
+# Nothing secret should ever live in this repo, but belt and braces.
+.env
+*.local
+*.log
+
+
+parked/
+
+personal/

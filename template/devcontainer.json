@@ -1,0 +1,44 @@
+{
+  "name": "__PROJECT__-agent",
+
+  // Prebuilt centrally by airlock\install.ps1, so there is one image to fix
+  // rather than one per project. Rebuild with:  agent -Build
+  "image": "airlock:1",
+
+  // Passed straight to docker, so isolation here is identical to `agent`.
+  "runArgs": [
+    "--cap-drop=ALL",                    // dev work needs no Linux capabilities
+    "--security-opt=no-new-privileges",  // blocks setuid escalation
+    "--memory=8g", "--memory-swap=8g",   // equal values disable swap: fail fast
+    "--cpus=4",
+    "--pids-limit=512"                   // fork-bomb cap
+  ],
+
+  // This mount list IS the security policy. One project, nothing else.
+  "workspaceFolder": "/work",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/work,type=bind",
+
+  "mounts": [
+    // Claude login + session history. Same volume name `agent` derives, so both
+    // launchers share one login and one history.
+    "source=agent-home-__PROJECT__,target=/home/dev,type=volume",
+
+    // Your global CLAUDE.md only -- read-only. Never the whole ~/.claude, which
+    // holds host credentials and every project's transcripts.
+    "source=${localEnv:USERPROFILE}/.claude/CLAUDE.md,target=/home/dev/.claude/CLAUDE.md,type=bind,readonly",
+
+    // Shared wheel cache. Public artifacts only.
+    "source=uv-cache,target=/home/dev/.cache/uv,type=volume"
+  ],
+
+  // Deliberately absent: ~/.aws, ~/.ssh, other repos, and /var/run/docker.sock --
+  // the socket alone would void everything above.
+
+  "remoteUser": "dev",
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["anthropic.claude-code", "ms-python.python"]
+    }
+  }
+}

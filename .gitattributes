@@ -1,0 +1,13 @@
+# Shell scripts MUST keep LF endings. A CRLF shebang line makes the kernel fail to
+# recognise `#!`, the script falls back to /bin/sh, and the firewall silently does
+# nothing -- the same failure a byte-order mark caused once already. Without this,
+# a clone on a machine with core.autocrlf=true reintroduces it.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.conf          text eol=lf
+
+# PowerShell stays CRLF, which is what Windows PowerShell expects.
+*.ps1           text eol=crlf
+
+# Everything else: normalise in the repo, check out native.
+*               text=auto
