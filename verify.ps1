@@ -8,7 +8,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Image = 'airlock:1'
+    [string] $Image = 'vestibule:1'
 )
 
 $script:Failures = 0
@@ -33,7 +33,7 @@ function Test-Item {
 }
 
 Write-Host ""
-Write-Host "airlock checks" -ForegroundColor Cyan
+Write-Host "vestibule checks" -ForegroundColor Cyan
 Write-Host ""
 
 Test-Item "docker responds" {
@@ -121,7 +121,7 @@ $fwLines = @(
     'if timeout 8 bash -c "exec 3<>/dev/tcp/1.1.1.1/443" 2>/dev/null; then echo DENY_LEAK; else echo DENY_OK; fi'
 )
 # LF endings and no BOM: CRLF breaks the shebang, and a BOM breaks it differently.
-$fwFile = Join-Path ([System.IO.Path]::GetTempPath()) 'airlock-fw-probe.sh'
+$fwFile = Join-Path ([System.IO.Path]::GetTempPath()) 'vestibule-fw-probe.sh'
 [System.IO.File]::WriteAllText($fwFile, ($fwLines -join "`n") + "`n",
                                (New-Object System.Text.UTF8Encoding($false)))
 

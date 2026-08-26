@@ -1,9 +1,9 @@
 {
   "name": "__PROJECT__-agent",
 
-  // Prebuilt centrally by airlock\install.ps1, so there is one image to fix
+  // Prebuilt centrally by vestibule\install.ps1, so there is one image to fix
   // rather than one per project. Rebuild with:  agent -Build
-  "image": "airlock:1",
+  "image": "vestibule:1",
 
   // Passed straight to docker, so isolation here is identical to `agent`.
   "runArgs": [

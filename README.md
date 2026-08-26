@@ -1,4 +1,4 @@
-# airlock
+# vestibule
 
 Run coding agents on Windows without giving them your whole machine.
 
@@ -7,7 +7,7 @@ environment variables, same filesystem. It can read the `.env` in every project 
 machine, your `~/.aws` credentials, your SSH keys, your browser cookies. Not because it
 is malicious, but because nothing separates its access from yours.
 
-airlock is a small launcher that runs them in a container instead. One project in reach,
+vestibule is a small launcher that runs them in a container instead. One project in reach,
 nothing else. The agent logs in to Claude as itself rather than as you, so a bad session
 cannot replay your identity anywhere.
 
@@ -37,6 +37,11 @@ Built for one person's machine and used daily there. Specifics beat a warning la
 
 ## Read this before you rely on it
 
+**What this is for:** running an agent harness against your own code without it reaching
+the rest of your machine. It is not a sandbox for executing untrusted or AI-generated
+code you have not reviewed. The limits below follow from that scope rather than being
+shortfalls against it.
+
 A security tool that overpromises is worse than none. What this does *not* do:
 
 **It does not protect the project you mount.** That directory is a live bind mount and
@@ -56,6 +61,24 @@ the sandbox. This limits its reach; it does not detect it.
 **It records almost nothing.** Blocked network attempts are dropped silently, so you
 cannot tell "the agent never tried" from "the agent tried forty times and was stopped".
 
+**The mount list does not cover host network services.** Docker Desktop resolves
+`host.docker.internal` from inside every container, so a session can reach anything your
+host has listening. On a default Windows install that includes **SMB on port 445**,
+verified reachable from a vestibule container. Reaching a service is not an escape -- SMB
+demands authentication -- but with any valid Windows credential a session could mount
+host shares and read or write outside `/work` entirely, bypassing the mount list. Two
+things close it, neither of them the default: [property 3](#3-governed-egress), whose
+default-deny policy drops the host gateway like any other unlisted destination, or
+`agent -NoNetwork`. Both cost something -- the firewall needs `NET_ADMIN` back, and
+`-NoNetwork` removes all egress.
+
+**The container runtime is part of your trust base.** CVE-2025-9074 (CVSS 9.3, fixed in
+Docker Desktop 4.44.3) let any container reach Docker's internal Engine API
+unauthenticated, start a privileged container and mount the host filesystem. It needed
+no Docker socket and worked with Enhanced Container Isolation on, so it defeated the
+control this README ranks second. Keep Docker Desktop current; nothing here substitutes
+for that.
+
 What it *does* cover: your other repositories, `~/.aws`, `~/.ssh`, browser cookies, host
 processes, the Docker socket, your host agent credentials and every past session's
 transcripts -- plus caps on CPU, memory and process count so a runaway loop cannot take
@@ -68,14 +91,27 @@ the machine down.
 | | Notes |
 |---|---|
 | **Windows 10 (2004+) or Windows 11** | Needed for the WSL2 backend |
-| **Docker Desktop**, WSL2 backend | Developed against 29.7.2 |
+| **Docker Desktop, WSL2 backend enabled** | Settings -> General -> "Use the WSL 2 based engine". Default on recent installs, but confirm -- see below. Developed against 29.7.2 |
 | **PowerShell 5.1** | Ships with Windows. PowerShell 7 works too |
 | **A Claude subscription** | Authenticated inside the container, not on the host |
 | **~1 GB free disk** | The image is 250 MB; the rest is caches. Project dependencies are extra |
 | **Git** | Only to clone this repository -- the container has its own |
 
-**Not** required: a WSL2 Linux distribution (Docker Desktop provides its own), Kubernetes,
-nested virtualisation, or administrator rights once Docker Desktop is installed.
+**Not** required: a WSL2 Linux distribution of your own (Docker Desktop provides one),
+Kubernetes, nested virtualisation, or administrator rights once Docker Desktop is
+installed.
+
+**Confirm the backend.** Docker Desktop can run on WSL2 or on Hyper-V, and this matters
+beyond preference: the memory tuning and disk reclamation below are WSL2-only commands
+that silently do nothing on the Hyper-V backend.
+
+```powershell
+wsl -l -v      # a "docker-desktop" distro listed = WSL2 backend in use
+```
+
+Both backends put containers in a VM, so the isolation argument in
+[property 1](#1-kernel-isolation) holds either way. It is the maintenance advice that
+assumes WSL2.
 
 **On memory.** Sessions default to an 8 GB cap, and those caps limit each container
 individually -- not the total. The WSL2 VM takes roughly half your RAM unless
@@ -86,8 +122,8 @@ parallel work, or raise the VM's allocation.
 ## Install
 
 ```powershell
-git clone https://github.com/Shubh18s/airlock.git
-cd airlock
+git clone https://github.com/Shubh18s/vestibule.git
+cd vestibule
 .\install.ps1
 ```
 
@@ -177,7 +213,7 @@ takes every pane with it. For runs that must survive that, start the container d
 and exec into it:
 
 ```powershell
-docker run -d --name agent-myproject ... airlock:1 sleep infinity
+docker run -d --name agent-myproject ... vestibule:1 sleep infinity
 docker exec -it agent-myproject tmux new-session -A -s main
 ```
 
@@ -198,7 +234,7 @@ docker run -it --rm `
   --memory=8g --memory-swap=8g `
   --cpus=4 `
   --pids-limit=512 `
-  airlock:1 bash
+  vestibule:1 bash
 ```
 
 Those flags are not equally important. In descending order of what they buy:

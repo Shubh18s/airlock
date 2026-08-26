@@ -7,7 +7,7 @@
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [string] $Image = 'airlock:1',
+    [string] $Image = 'vestibule:1',
     [switch] $SkipBuild,
 
     # Passed to `docker build` as --build-arg. Mainly HARNESSES, which decides which
@@ -41,8 +41,8 @@ $agentPath   = Join-Path $root 'agent.ps1'
 $block = @"
 
 # Contained agent sessions
-`$airlock = "$agentPath"
-if (Test-Path `$airlock) { . `$airlock } else { Write-Warning "airlock not found at `$airlock" }
+`$vestibule = "$agentPath"
+if (Test-Path `$vestibule) { . `$vestibule } else { Write-Warning "vestibule not found at `$vestibule" }
 "@
 
 if (-not (Test-Path $profilePath)) {
@@ -50,7 +50,7 @@ if (-not (Test-Path $profilePath)) {
     Write-Host "Created $profilePath" -ForegroundColor DarkGray
 }
 
-if (Select-String -Path $profilePath -SimpleMatch 'airlock\agent.ps1' -Quiet) {
+if (Select-String -Path $profilePath -SimpleMatch 'vestibule\agent.ps1' -Quiet) {
     Write-Host "Profile already wired." -ForegroundColor DarkGray
 }
 else {
