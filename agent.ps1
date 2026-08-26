@@ -14,7 +14,7 @@
 
 # Captured at dot-source time so the functions can find image/ and template/
 # regardless of what directory they are later called from.
-$Global:AirlockRoot = $PSScriptRoot
+$Global:VestibuleRoot = $PSScriptRoot
 
 
 function agent {
@@ -34,8 +34,8 @@ function agent {
 
         [int]    $MemoryGb   = 8,
         [int]    $Cpus       = 4,
-        [string] $Image      = 'airlock:1',
-        [string] $ContextDir = (Join-Path $Global:AirlockRoot 'image'),
+        [string] $Image      = 'vestibule:1',
+        [string] $ContextDir = (Join-Path $Global:VestibuleRoot 'image'),
 
         # Command to run instead of bash, flags included: `agent claude --resume`
         [Parameter(ValueFromRemainingArguments = $true)]
@@ -151,7 +151,7 @@ function New-AgentDevcontainer {
 
     $project  = (Split-Path -Leaf (Resolve-Path $Path)) -replace '[^a-zA-Z0-9_.-]', '-'
     $target   = Join-Path $Path '.devcontainer'
-    $template = Join-Path $Global:AirlockRoot 'template'
+    $template = Join-Path $Global:VestibuleRoot 'template'
 
     if ((Test-Path $target) -and -not $Force) {
         throw "$target already exists. Re-run with -Force to overwrite."
