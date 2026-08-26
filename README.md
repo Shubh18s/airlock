@@ -207,6 +207,15 @@ the container and every git command fails. Created inside, the path resolves.
 A second terminal joins the same session with
 `docker exec -it agent-myproject tmux attach`.
 
+**The shipped tmux config is minimal**: default prefix, no keybindings, no colours. It
+sets only what being in a container justifies. 100k scrollback, because agent runs are
+long. Mouse on, because there is no host scrollback to fall back on. Truecolor, so diffs
+do not drop to 8 colours. OSC 52 for the clipboard, since no `pbcopy` or X11 socket
+exists inside. And zero escape-time, so agent TUIs stop swallowing ESC.
+
+Your own config layers on top: tmux reads `/etc/tmux.conf` before `~/.tmux.conf`, so
+writing yours into a project's home volume overrides everything shipped.
+
 **Persistence caveat.** tmux is a child of the container's main process. Detaching tmux
 is safe, but **closing the terminal that `agent` is attached to stops the container** and
 takes every pane with it. For runs that must survive that, start the container detached
