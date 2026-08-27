@@ -13,6 +13,12 @@
 # inside /work. It serves ad-hoc scripting only, so it should simply be current.
 FROM python:3.13-slim-bookworm@sha256:cbd229d7b9bd041012af758ce5ffd807a6518d76493ce9035d208f1db9ceff1e
 
+# Debian slim sets no locale, leaving LC_CTYPE=POSIX. tmux then treats bytes as
+# single-byte and mangles multi-byte UTF-8, so box-drawing and block characters in agent
+# TUIs render as garbage inside tmux while looking correct outside it. C.UTF-8 is built
+# into glibc and needs no locale generation.
+ENV LANG=C.UTF-8
+
 # Debian's signed repos only; no third-party apt sources.
 #   iptables/ipset/dnsutils  init-firewall.sh needs these
 #   ripgrep/jq               agent tooling; without rg it falls back to slow greps
@@ -41,7 +47,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.8.13@sha256:4de5495181a281bc744845b9579acf7b2
 # exactly what went in -- which matters when a harness has shipped RCE bugs.
 #
 # The firewall's built-in allowlist names Anthropic endpoints only; a harness using
-# another provider needs that host in its project allowed-domains.txt.
+# another provider needs that host in its project .vestibule/allowed-domains.txt.
 ARG HARNESSES="@anthropic-ai/claude-code"
 RUN npm install -g ${HARNESSES} && npm cache clean --force
 

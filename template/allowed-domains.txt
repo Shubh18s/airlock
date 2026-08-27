@@ -1,4 +1,5 @@
-# Per-project egress allowlist, on top of the built-in minimum in
+# Per-project egress allowlist. Belongs at .vestibule/allowed-domains.txt in the project
+# root, which is where `agent -Firewall` looks. On top of the built-in minimum in
 # image/init-firewall.sh (api.anthropic.com, statsig.anthropic.com,
 # registry.npmjs.org, pypi.org, files.pythonhosted.org).
 #

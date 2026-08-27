@@ -27,10 +27,9 @@ ALLOWED_DOMAINS=(
 # container) and shows up in `git diff`. To remove the possibility, point
 # AGENT_ALLOWLIST at a read-only mount outside the workspace.
 #
-# The default must match the workspace mount point used by agent.ps1 and
-# template/devcontainer.json. A mismatch fails SILENTLY: the file is not found and only
-# the built-in domains apply.
-ALLOWLIST_FILE="${AGENT_ALLOWLIST:-/work/.devcontainer/allowed-domains.txt}"
+# The default must match the workspace mount point used by agent.ps1. A mismatch fails
+# SILENTLY: the file is not found and only the built-in domains apply.
+ALLOWLIST_FILE="${AGENT_ALLOWLIST:-/work/.vestibule/allowed-domains.txt}"
 
 if [[ -f "$ALLOWLIST_FILE" ]]; then
   while IFS= read -r line; do
