@@ -3,13 +3,19 @@
 
       .\verify.ps1
 
-  Every check here exists because something went wrong once. Run it after a rebuild,
-  or when a session behaves oddly, before you start debugging your own code.
+  Every check here exists because something went wrong once. Runs automatically after a
+  build, from install.ps1 and `agent -Build`; run it by hand when a session behaves oddly,
+  before you start debugging your own code.
 #>
 [CmdletBinding()]
 param(
     [string] $Image = 'vestibule:1'
 )
+
+# Set explicitly rather than inherited. Invoked with & from a caller that set 'Stop',
+# as `agent` does, docker's ordinary stderr becomes a terminating error, so every check
+# that shells out reports a failure that never happened.
+$ErrorActionPreference = 'Continue'
 
 $script:Failures = 0
 
@@ -84,9 +90,11 @@ Test-Item "capabilities dropped (sudo unavailable)" {
     $LASTEXITCODE -ne 0
 } "sudo should FAIL under --cap-drop=ALL. If it succeeds, hardening is not applied."
 
+# A socket connect, not an HTTP request: reachability is the question, and an HTTP 4xx
+# would exit non-zero while proving the network works.
 Test-Item "outbound network reachable" {
-    docker run --rm $Image python3 -c "import urllib.request;urllib.request.urlopen('https://api.anthropic.com',timeout=10)" 2>$null | Out-Null
-    $true  # a 4xx still proves reachability; only a hang or DNS failure matters
+    docker run --rm $Image python3 -c "import socket;socket.create_connection(('api.anthropic.com',443),timeout=10)" 2>$null | Out-Null
+    $LASTEXITCODE -eq 0
 } "No egress. Check Docker's network or a corporate proxy."
 
 Test-Item "per-project network can be created" {
@@ -96,12 +104,12 @@ Test-Item "per-project network can be created" {
     $ok
 } "Address pools may be exhausted. Try: docker network prune"
 
-# The allowlist is opt-in and needs NET_ADMIN, so a plain session never exercises it --
+# The allowlist is opt-in and needs NET_ADMIN, so a plain session never exercises it,
 # leaving the one piece of active defence untested. Four constraints, each from a test
 # that once failed for the wrong reason:
 #
 #   - /dev/tcp, not curl. Neither curl nor wget is in the image, and a missing binary
-#     makes the "blocked" test pass on 'command not found' -- a false positive.
+#     makes the "blocked" test pass on 'command not found', which is a false positive.
 #   - A literal IP, not a domain. CDN-fronted names resolve differently at firewall time
 #     and probe time, so a domain-based test fails intermittently.
 #   - `timeout` on every probe. Rules DROP rather than REJECT, so a blocked connect hangs
@@ -146,16 +154,38 @@ Test-Item "firewall: non-allowlisted address blocked" {
     $fw -match 'DENY_OK'
 } "An address NOT on the allowlist was still reachable. The allowlist is not enforcing."
 
+# -CommandType Function is required. Run from the repo directory, a bare
+# `Get-Command agent` resolves to agent.ps1 itself as an ExternalScript, so this passed
+# whether or not the profile was ever wired.
 Test-Item "'agent' command is loaded" {
-    [bool](Get-Command agent -ErrorAction SilentlyContinue)
+    [bool](Get-Command agent -CommandType Function -ErrorAction SilentlyContinue)
 } "Run .\install.ps1, then open a new shell (or: . `$PROFILE)."
 
 # Regression guard. `agent claude` once bound 'claude' to -Image, failed to find that
 # image, rebuilt the whole thing under that tag, and never ran the agent.
+#
+# Read the file, not the session. The same ExternalScript resolution above reported the
+# script's own binding rather than the function's, so this failed whenever verify ran
+# without the profile loaded: by hand from the repo, or in CI, which is precisely where
+# a regression guard has to work.
 Test-Item "arguments do not bind positionally" {
-    $cmd = Get-Command agent -ErrorAction SilentlyContinue
-    if (-not $cmd) { return $false }
-    -not ([System.Management.Automation.CommandMetadata]::new($cmd)).PositionalBinding
+    $path = Join-Path $PSScriptRoot 'agent.ps1'
+    $ast  = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
+    $fn   = $ast.Find({
+        param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'agent'
+    }, $true)
+    if (-not $fn) { return $false }
+
+    $ok = $false
+    foreach ($attr in $fn.Body.ParamBlock.Attributes) {
+        if ($attr.TypeName.Name -ne 'CmdletBinding') { continue }
+        foreach ($na in $attr.NamedArguments) {
+            if ($na.ArgumentName -eq 'PositionalBinding' -and
+                $na.Argument.Extent.Text -match '\$false') { $ok = $true }
+        }
+    }
+    $ok
 } "agent must declare [CmdletBinding(PositionalBinding = `$false)], or 'agent claude' silently rebuilds the image."
 
 Write-Host ""
