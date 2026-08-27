@@ -1,43 +1,41 @@
 # Backlog
 
-Known gaps, roughly in priority order. Published rather than kept private because the
-README claims specific properties, and where those claims are weak is worth stating.
+Known gaps, roughly in priority order. Each entry states the gap, why it matters, and the
+intended fix.
 
-## 1. Policy is imperative, and has drifted three times
+## 1. Policy is imperative rather than declarative
 
 The runtime half of this design is declarative: a Dockerfile, reviewable as a diff. The
 policy half is not. `agent.ps1` computes the security posture at launch by assembling a
 `docker run` command from strings, so there is no schema, nothing validates the result,
 and the posture cannot be read without mentally executing a script that branches.
 
-Four costs already paid here:
+Four consequences:
 
-- **No validation.** `-v "pwd:/work"` was a well-formed docker command that silently
-  created an empty volume and mounted it. A schema rejects that; a string builder cannot.
-- **Two implementations, drifted three times.** `agent.ps1` and `template/devcontainer.json`
-  express the same policy twice. The global `CLAUDE.md` mount, session recording, and the
-  firewall mechanism have each been present in one and missing from the other.
-- **The policy language fights back.** Case-insensitive `-replace` during a rename,
-  positional binding rebuilding the image under the wrong tag, quoting mangled on the way
-  to a native command. Three bugs originating in the language rather than the design.
+- **No validation.** A malformed mount such as `-v "pwd:/work"` is still a well-formed
+  docker command: it creates an empty volume and mounts it. A schema rejects that; a
+  string builder cannot.
+- **Two implementations of one policy.** `agent.ps1` and `template/devcontainer.json`
+  express the same posture twice, so any change has to be made in both or they diverge.
+- **The policy language is a hazard.** Case-insensitive `-replace`, positional parameter
+  binding and quote mangling on the way to a native command are all failure modes
+  originating in PowerShell rather than in the design.
 - **Nothing compares the result to the claim.** No step checks the rendered command
   against the posture the README describes.
 
 What mitigates this today is `verify.ps1`, which checks after the fact rather than
 before: it asserts the posture the container actually has instead of trusting the script
-that produced it. That is why it caught a dead firewall within an hour of existing. It runs
-automatically after every build, from both `install.ps1` and `agent -Build`, which is
-where the thing it checks changes. It does not run per session, so a posture assembled
-from flags at launch is still unvalidated.
+that produced it. It runs automatically after every build, from both `install.ps1` and
+`agent -Build`, which is where the thing it checks changes. It does not run per session,
+so a posture assembled from flags at launch is still unvalidated.
 
-Two structural mitigations since: every `-v` is assembled in one block rather than
-accumulated across the function, and the startup readout is parsed back out of the
-assembled arguments rather than restated per branch. Neither is validation. Both narrow
-where a divergence can originate, which is what allowed `-Isolated` to mount a home
-volume, a shared cache and a host bind that no branch of the code appeared to grant.
+Two structural mitigations narrow where a divergence can originate: every `-v` is
+assembled in one block rather than accumulated across the function, and the startup
+readout is parsed back out of the assembled arguments rather than restated per branch.
+Neither is validation.
 
-**The fix.** Move the posture into data -- one `policy.psd1` or JSON holding mounts,
-capabilities, network and limits -- and have both launchers render it rather than restate
+**The fix.** Move the posture into data, one `policy.psd1` or JSON holding mounts,
+capabilities, network and limits, and have both launchers render it rather than restate
 it. `agent.ps1` becomes a controller, `template/devcontainer.json` becomes generated
 output, and `verify.ps1` asserts the rendered result matches the declared policy. One
 source of truth, reviewable as a diff, structurally unable to drift.
@@ -45,18 +43,16 @@ source of truth, reviewable as a diff, structurally unable to drift.
 Worth weighing against scale: a policy bug here reaches one laptop, where the same
 weakness in a multi-tenant deployment reaches every tenant. Imperative policy with a
 strong post-hoc check is defensible at this size, but only while the check is taken
-seriously, and it should be a stated choice rather than an accident of having started in
-PowerShell.
+seriously, and it should be a stated choice rather than an implicit one.
 
 ## 2. Observability of behaviour
 
-Configuration and outcome are now recorded host-side by both launchers, and `agent`
-prints what changed in the working tree as a session ends. What is still missing is
-behaviour.
+Configuration and outcome are recorded host-side by both launchers, and `agent` prints
+what changed in the working tree as a session ends. What is still missing is behaviour.
 
 - **Blocked attempts are dropped silently**, so "never tried" and "tried forty times and
   was stopped" produce identical output. `-j LOG` before the DROP policy, rate-limited,
-  would fix this -- but the LOG target writes to the kernel ring buffer, which is shared
+  would fix this, but the LOG target writes to the kernel ring buffer, which is shared
   across the whole VM and not namespaced. Containers cannot read it (`CAP_SYSLOG`), so
   entries mix and the read path is `wsl -d docker-desktop -- dmesg` on the host. Workable
   with a project-tagged prefix; the fiddliest of the remaining pieces.
@@ -90,11 +86,11 @@ Enabling property 3 closes it properly. The firewall is default-deny (`-P OUTPUT
 plus an allowlist), so the host gateway is dropped like any other unlisted destination,
 on both address families. The IPv6 policy covers it a second time.
 
-That is a real fix, not a workaround -- but it costs `NET_ADMIN`, and the README argues
-that dropping every capability is worth more than filtering destinations. So closing this
-means reversing that trade for the session. `agent -NoNetwork` closes it without the
-capability, at the cost of all egress. What is missing is an option that removes host
-reach while keeping both the capability drop and normal outbound access.
+That is a real fix rather than a workaround, but it costs `NET_ADMIN`, and the README
+argues that dropping every capability is worth more than filtering destinations. So
+closing this means reversing that trade for the session. `agent -NoNetwork` closes it
+without the capability, at the cost of all egress. What is missing is an option that
+removes host reach while keeping both the capability drop and normal outbound access.
 
 Worth investigating: whether a rootless or user-namespaced configuration removes host
 reachability without giving capabilities back.
@@ -110,34 +106,33 @@ string and the mount source becomes `/.claude/CLAUDE.md`. Docker then creates an
 *directory* at the filesystem root rather than erroring, and preferences silently do not
 load.
 
-Latent today because nothing but Windows has run it. The fix is what `agent.ps1` already
-does: resolve the real path at generation time and bake it in, dropping `localEnv`
-entirely. Blocks item 6.
+Confined to non-Windows hosts, which are not yet supported. The fix is what `agent.ps1`
+already does: resolve the real path at generation time and bake it in, dropping
+`localEnv` entirely. Blocks item 6.
 
 ## 5. Continuous integration
 
-Nothing has ever been built from a clean checkout. Everything so far was validated
-against one machine's Docker cache, so a bad digest pin would not surface.
+The build is not exercised from a clean checkout. Validation so far has run against a
+warm Docker cache, so a bad digest pin would not surface.
 
 Two jobs, because Windows runners cannot run Linux containers:
 
-- **`ubuntu-latest`** -- build the image, run the image and firewall checks under `pwsh`.
+- **`ubuntu-latest`**: build the image, run the image and firewall checks under `pwsh`.
   Real coverage of the security-relevant half.
-- **`windows-latest`** -- parse-check the four scripts, assert `PositionalBinding` is
-  off. No Docker.
+- **`windows-latest`**: parse-check the four scripts, assert `PositionalBinding` is off.
+  No Docker.
 
-The `PositionalBinding` guard now reads `agent.ps1` directly rather than the loaded
-function. Before that it resolved `agent` to the script file rather than the function and
-reported a failure that was not real, which is precisely what this job would have hit.
+The `PositionalBinding` guard must read `agent.ps1` directly rather than the loaded
+function, since resolving `agent` in a shell can bind the script file instead.
 
 Still needs an `-ImageOnly` switch on `verify.ps1` to skip the one remaining
-profile-dependent check. Note
-that this validates the image, not the launcher on its actual target platform, and the
-README should say so rather than implying a green badge means more than it does.
+profile-dependent check. Note that this validates the image, not the launcher on its
+actual target platform, and the README should say so rather than implying a green badge
+means more than it does.
 
 ## 6. macOS support
 
-The image needs no change -- the pinned digests are OCI indexes carrying arm64, so they
+The image needs no change: the pinned digests are OCI indexes carrying arm64, so they
 resolve natively on Apple Silicon.
 
 - `agent.sh` and `install.sh` (zsh, guarded source line). Simpler than the PowerShell
@@ -179,8 +174,7 @@ and `exec` into it, making overnight runs survive a closed terminal. Means dropp
 
 The base is still bookworm, now oldstable. Moving changes `iptables`, `ipset` and `tmux`
 versions simultaneously, which is why it is its own change rather than a rider on the
-Python bump. The firewall checks would catch a regression, which they would not have
-before those tests existed.
+Python bump. The firewall checks cover the resulting regression surface.
 
 ## 11. Single-dash harness flags collide with parameter binding
 
