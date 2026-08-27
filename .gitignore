@@ -7,3 +7,7 @@
 parked/
 
 personal/
+
+# Session records used to live here. They now live in %LOCALAPPDATA%\vestibule, because
+# a log inside the repo is editable by any session run from the repo -- which defeats the
+# only reason to keep one.

@@ -35,15 +35,15 @@ Also in scope:
 - A way to reach a host path that is not on the mount list
 - A way for one project's session to reach another's container, volumes, or credentials
 - A way to obtain the host's credentials from inside a container
-- Any way the container is weaker than the README claims
+- Any way the container is weaker than [docs/design.md](docs/design.md) claims
 
 ## What is not in scope
 
-These are documented behaviours, not bugs. They are described in the README under
-[Read this before you rely on it](README.md#read-this-before-you-rely-on-it):
+These are documented behaviours, not bugs. They are described in full under
+[What it does not do](docs/design.md#what-it-does-not-do):
 
 - **The mounted project is fully readable and writable**, including any `.env` inside it.
-  The agent has to edit that directory; that is the point.
+  The agent has to be able to edit that directory.
 - **Egress is unrestricted by default.** The allowlist is opt-in (property 3). A session
   reaching an arbitrary host in the default configuration is expected.
 - **A kernel exploit defeats this tier.** Containers share one kernel (property 1).

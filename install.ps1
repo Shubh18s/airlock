@@ -28,6 +28,13 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Image build failed." }
 }
 
+# Verify the image rather than trusting that it built. Nothing validates the security
+# posture on the way out, so this check is what stands between a claim in the README and
+# a control that silently does nothing. Runs here and after `agent -Build`, which is
+# where the thing it checks changes.
+& (Join-Path $root 'verify.ps1') -Image $Image
+if ($LASTEXITCODE -ne 0) { throw "Verification failed. The image is not usable as configured." }
+
 # CurrentUserAllHosts (profile.ps1), not $PROFILE. The default $PROFILE is
 # host-specific, so `agent` would exist in Windows Terminal but not in VS Code's
 # PowerShell console. This one runs for every host.
