@@ -1,20 +1,20 @@
 ﻿<#
-  Checks that the image and launcher actually work.
+  Checks that the image and launcher work.
 
       .\verify.ps1
 
-  Every check here exists because something went wrong once. Runs automatically after a
-  build, from install.ps1 and `agent -Build`; run it by hand when a session behaves oddly,
-  before you start debugging your own code.
+  Each check covers a failure seen in practice. Runs automatically after a build, from
+  install.ps1 and `agent -Build`. Run it by hand when a session behaves oddly, before
+  debugging your own code.
 #>
 [CmdletBinding()]
 param(
     [string] $Image = 'vestibule:1'
 )
 
-# Set explicitly rather than inherited. Invoked with & from a caller that set 'Stop',
-# as `agent` does, docker's ordinary stderr becomes a terminating error, so every check
-# that shells out reports a failure that never happened.
+# Set explicitly, not inherited. Called with & from a caller using 'Stop', as `agent`
+# does, docker's ordinary stderr becomes a terminating error and every check that shells
+# out reports a failure that never happened.
 $ErrorActionPreference = 'Continue'
 
 $script:Failures = 0
@@ -90,8 +90,8 @@ Test-Item "capabilities dropped (sudo unavailable)" {
     $LASTEXITCODE -ne 0
 } "sudo should FAIL under --cap-drop=ALL. If it succeeds, hardening is not applied."
 
-# A socket connect, not an HTTP request: reachability is the question, and an HTTP 4xx
-# would exit non-zero while proving the network works.
+# A socket connect, not an HTTP request: an HTTP 4xx would exit non-zero while proving
+# the network works.
 Test-Item "outbound network reachable" {
     docker run --rm $Image python3 -c "import socket;socket.create_connection(('api.anthropic.com',443),timeout=10)" 2>$null | Out-Null
     $LASTEXITCODE -eq 0
@@ -104,17 +104,17 @@ Test-Item "per-project network can be created" {
     $ok
 } "Address pools may be exhausted. Try: docker network prune"
 
-# The allowlist is opt-in and needs NET_ADMIN, so a plain session never exercises it,
-# leaving the one piece of active defence untested. Four constraints, each from a test
+# The allowlist is opt-in and needs NET_ADMIN, so no plain session exercises it. This
+# probe is the only test of the one active defence. Four constraints, each from a test
 # that once failed for the wrong reason:
 #
-#   - /dev/tcp, not curl. Neither curl nor wget is in the image, and a missing binary
-#     makes the "blocked" test pass on 'command not found', which is a false positive.
-#   - A literal IP, not a domain. CDN-fronted names resolve differently at firewall time
-#     and probe time, so a domain-based test fails intermittently.
-#   - `timeout` on every probe. Rules DROP rather than REJECT, so a blocked connect hangs
-#     until TCP gives up.
-#   - Mount the script, do not pass it as an argument. PowerShell rewrites quotes on the
+#   - /dev/tcp, not curl: neither curl nor wget is in the image, and a missing binary
+#     makes the "blocked" test pass on 'command not found', a false positive.
+#   - A literal IP, not a domain: CDN-fronted names resolve differently at firewall time
+#     and probe time, so a domain-based test is intermittent.
+#   - `timeout` on every probe: rules DROP rather than REJECT, so a blocked connect
+#     hangs until TCP gives up.
+#   - Mount the script, do not pass it as an argument: PowerShell rewrites quotes on the
 #     way to a native command and this needs both kinds.
 #
 # The container prints its own verdicts; PowerShell only reads them.
@@ -154,20 +154,20 @@ Test-Item "firewall: non-allowlisted address blocked" {
     $fw -match 'DENY_OK'
 } "An address NOT on the allowlist was still reachable. The allowlist is not enforcing."
 
-# -CommandType Function is required. Run from the repo directory, a bare
-# `Get-Command agent` resolves to agent.ps1 itself as an ExternalScript, so this passed
-# whether or not the profile was ever wired.
+# -CommandType Function is required: run from the repo directory, a bare
+# `Get-Command agent` resolves to agent.ps1 itself as an ExternalScript and the check
+# passes whether or not the profile was ever wired.
 Test-Item "'agent' command is loaded" {
     [bool](Get-Command agent -CommandType Function -ErrorAction SilentlyContinue)
 } "Run .\install.ps1, then open a new shell (or: . `$PROFILE)."
 
-# Regression guard. `agent claude` once bound 'claude' to -Image, failed to find that
-# image, rebuilt the whole thing under that tag, and never ran the agent.
+# Regression guard: `agent claude` once bound 'claude' to -Image, found no such image,
+# rebuilt the whole thing under that tag and never ran the agent.
 #
-# Read the file, not the session. The same ExternalScript resolution above reported the
-# script's own binding rather than the function's, so this failed whenever verify ran
-# without the profile loaded: by hand from the repo, or in CI, which is precisely where
-# a regression guard has to work.
+# Read the file, not the session. The ExternalScript resolution above reports the
+# script's own binding rather than the function's, failing whenever verify runs without
+# the profile loaded: by hand from the repo, or in CI, which is where a regression guard
+# most has to work.
 Test-Item "arguments do not bind positionally" {
     $path = Join-Path $PSScriptRoot 'agent.ps1'
     $ast  = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)
@@ -187,6 +187,42 @@ Test-Item "arguments do not bind positionally" {
     }
     $ok
 } "agent must declare [CmdletBinding(PositionalBinding = `$false)], or 'agent claude' silently rebuilds the image."
+
+# Regression guard: the scope check once asked only whether the working directory held
+# repositories as immediate children. A home directory with its repositories in ~\repos
+# does not, so `agent` in C:\Users\you mounted .ssh, .aws and .claude read-write at /work
+# while reporting a normal session.
+#
+# Dot-source the file rather than trust the session, for the reason above: the check has
+# to test what is on disk. Get-AgentScopeRefusal takes its home directory as an argument,
+# so these cases run against synthetic paths and cannot pass or fail on what happens to
+# exist on the machine running them.
+. (Join-Path $PSScriptRoot 'agent.ps1')
+$tHome = 'C:\Users\tester'
+
+foreach ($case in @(
+    @{ Path = 'C:\';                        Refuse = $true  },
+    @{ Path = 'C:\Users';                   Refuse = $true  },
+    @{ Path = $tHome;                       Refuse = $true  },
+    @{ Path = "$tHome\";                    Refuse = $true  },
+    @{ Path = 'c:\users\TESTER';            Refuse = $true  },
+    @{ Path = "$tHome\repos\..";            Refuse = $true  },
+    @{ Path = "$tHome\Documents";           Refuse = $true  },
+    @{ Path = "$tHome\OneDrive";            Refuse = $true  },
+    @{ Path = "$tHome\OneDrive - Contoso";  Refuse = $true  },
+    @{ Path = "$tHome\.ssh";                Refuse = $true  },
+    @{ Path = "$tHome\.claude\projects";    Refuse = $true  },
+    @{ Path = "$tHome\repos\project";       Refuse = $false },
+    @{ Path = "$tHome\Documents\project";   Refuse = $false },
+    @{ Path = 'D:\work\project';            Refuse = $false }
+)) {
+    $c    = $case
+    $verb = if ($c.Refuse) { 'refuses' } else { 'allows' }
+    Test-Item "scope $verb $($c.Path.Replace($tHome, '~'))" {
+        $r = Get-AgentScopeRefusal -Path $c.Path -HomePath $tHome
+        if ($c.Refuse) { $null -ne $r } else { $null -eq $r }
+    } "Get-AgentScopeRefusal should have $verb this path."
+}
 
 Write-Host ""
 if ($script:Failures -eq 0) {
