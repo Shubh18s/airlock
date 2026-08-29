@@ -50,7 +50,7 @@ flowchart LR
 ```
 
 Four connectors, and they are the entire security policy. The dashed items have no
-connector at all. Nothing checks them and refuses; no path is constructed in the first
+connector at all: nothing checks them and refuses, no path is constructed in the first
 place, so there is no rule to misconfigure and nothing for a persuasive prompt to talk
 its way around. Adding a fifth line is a deliberate act, and that is the whole review
 surface.
@@ -98,9 +98,9 @@ the security properties, and flag names are not yet stable.
 Kubernetes, nested virtualisation, or administrator rights once Docker Desktop is
 installed.
 
-**Confirm the backend.** Docker Desktop can run on WSL2 or on Hyper-V, and this matters
+**Confirm the backend.** Docker Desktop can run on WSL2 or on Hyper-V, and it matters
 beyond preference: the memory tuning and disk reclamation below are WSL2-only commands
-that silently do nothing on the Hyper-V backend.
+that do nothing on Hyper-V.
 
 ```powershell
 wsl -l -v      # a "docker-desktop" distro listed = WSL2 backend in use
@@ -109,11 +109,11 @@ wsl -l -v      # a "docker-desktop" distro listed = WSL2 backend in use
 Both backends put containers in a VM, so the isolation argument holds either way. It is
 the maintenance advice that assumes WSL2.
 
-**On memory.** Sessions default to an 8 GB cap, and those caps limit each container
-individually -- not the total. The WSL2 VM takes roughly half your RAM unless
-`.wslconfig` says otherwise, and all containers share it. Running several sessions
-alongside an application stack will exhaust it; use `agent -MemoryGb 4 -Cpus 2` for
-parallel work, or raise the VM's allocation.
+**On memory.** Sessions default to an 8 GB cap, applied per container rather than as a
+total. The WSL2 VM takes roughly half your RAM unless `.wslconfig` says otherwise, and
+all containers share it. Running several sessions alongside an application stack will
+exhaust it; use `agent -MemoryGb 4 -Cpus 2` for parallel work, or raise the VM's
+allocation.
 
 ## Install
 
@@ -131,9 +131,9 @@ agent -Isolated
 # inside:  claude   then /login
 ```
 
-`verify.ps1` runs after every build and blocks the session on failure. It takes about
-nineteen seconds. Run it by hand any time with `.\verify.ps1`, or pass
-`agent -SkipVerify` to get past a known failure.
+`verify.ps1` runs after every build, takes about nineteen seconds, and blocks the
+session on failure. Run it by hand with `.\verify.ps1`, or pass `agent -SkipVerify` to
+get past a known failure.
 
 ## Use
 
@@ -160,7 +160,7 @@ Scope comes from the working directory. There is nothing to configure per projec
 | `-NoNetwork` | `--network=none` | The agent cannot reach its own API, so no login and no Claude. See the combinations below |
 | `-Firewall` | Egress allowlist, from the 5 built-in domains plus `.vestibule/allowed-domains.txt` in your project | Grants four capabilities during startup only. Blocked requests hang rather than fail |
 | `-Env NAME=VALUE` | Passes variables that die with the container | The session can read them. Use short-lived, narrowly scoped values |
-| `-Force` | Overrides the guard below | |
+| `-Force` | Overrides the repo-parent guard below. It does not override the scope refusal | |
 | `-MemoryGb`, `-Cpus` | Default 8 and 4. Per container, not a total | |
 | `-Build`, `-BuildArg` | Rebuild the image, then verify it | Minutes |
 | `-SkipVerify` | Skip that check | |
@@ -179,9 +179,24 @@ allowlist, `-NoNetwork` is nothing.
 - **`-Firewall -Isolated`** runs, but the allowlist file lives in your project directory,
   which an isolated session does not mount. Only the 5 built-in domains apply, and
   `github.com` is not one of them, so `git clone` hangs. Use `-Isolated` on its own.
-- **`-Isolated` already skips the guard**, so it never needs `-Force`.
+- **`-Isolated` already skips both guards**, so it never needs `-Force`.
 
-**The guard.** If the current directory is not a repository but contains some, `agent`
+**Two guards, and only one of them yields.**
+
+**Scope.** Some directories are too broad to hand over at all, and `agent` refuses them
+on the shape of the path rather than on what is inside: a drive root, your home directory
+or anything above it, `Documents`, `Desktop`, `Downloads`, `OneDrive`, and the credential
+stores `.ssh`, `.aws`, `.claude`, `.gnupg`, `.azure`, `.kube`, `.docker`, `.config`.
+There is no `-Force` for these. `cd` into a single project, or use `-Isolated`.
+
+The check reads the path because reading the contents cannot answer the question. This
+guard originally asked only whether the directory held repositories as immediate
+children, which `C:\Users\you` does not when they live in `~\repos`: `agent` in a home
+directory mounted `.ssh`, `.aws` and `.claude` read-write at `/work` and reported a
+normal session. A home directory holding no repositories is still a home directory, and
+only the path knows that.
+
+**Repo-parent.** If the current directory is not a repository but contains some, `agent`
 refuses -- running it from `~/repos` would otherwise mount every project you own. `cd`
 into one repository, use `-Isolated`, or pass `-Force` for a deliberate multi-repo
 session.
@@ -244,11 +259,10 @@ When        Project       Via          Cmd    Secs Net        Changed Exit
 
 Project, command, duration, network posture, the *names* of any `-Env` variables, exit
 code, and files changed in the working tree. That last count comes from git on the host,
-and `agent` prints it as a session ends. Devcontainer rows carry nulls
-for duration and outcome because there is no host-side hook for a session ending: unknown,
-not clean.
+and `agent` prints it as a session ends. Devcontainer rows carry nulls for duration and
+outcome, there being no host-side hook for a session ending: unknown, not clean.
 
-It does not capture behaviour. Not which commands ran, not what was attempted and
+It does not capture behaviour: not which commands ran, not what was attempted and
 blocked.
 
 ---
@@ -275,9 +289,9 @@ blocked.
 | `/home/dev` | `agent-home-<project>` | per project | Login, session history, tmux config |
 | `/home/dev/.cache/uv` | `uv-cache` | shared | Downloaded wheels -- public artifacts only |
 
-The cost of per-project home volumes is one login per repository. A single shared volume
-is a one-line change if you prefer the convenience -- but it rebuilds inside the sandbox
-the same credential pile the design avoids outside it.
+Per-project home volumes cost one login per repository. A single shared volume is a
+one-line change if you prefer the convenience, but it rebuilds inside the sandbox the
+same credential pile the design avoids outside it.
 
 ## Notes
 
@@ -292,7 +306,7 @@ once per project; the home volume keeps it.
 time it is mounted, never again. Adding files to the image's home directory will not
 reach volumes that already exist.
 
-**No GPU by default.** `--gpus all` needs the NVIDIA Container Toolkit, and the launcher
+**No GPU by default.** `--gpus all` needs the NVIDIA Container Toolkit and the launcher
 does not pass it. For a local model, run it in its own container and attach that to the
 session's network rather than giving the agent the GPU.
 
