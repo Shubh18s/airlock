@@ -19,9 +19,9 @@ $Global:VestibuleRoot = $PSScriptRoot
 
 # Machine-local state, stored outside this repository.
 #
-# The record is only evidence if a session cannot edit it. Held inside the repository,
-# that depended on the working directory: running `agent` from the repository itself
-# mounts it read-write and places the log at /work/sessions/sessions.jsonl.
+# The record is only evidence if a session cannot edit it. Inside the repository that
+# depended on the working directory: running `agent` from the repository itself mounts
+# it read-write, log included.
 $Global:VestibuleLog = Join-Path $env:LOCALAPPDATA 'vestibule\sessions.jsonl'
 
 
@@ -29,10 +29,10 @@ function Invoke-Docker {
     <#
       Run docker with $ErrorActionPreference forced to Continue.
 
-      Docker writes ordinary progress to stderr. Under 'Stop', PowerShell turns redirected
-      native stderr into a terminating error, so `agent` fails as soon as a caller pipes
-      or redirects its output, as a script or CI job does. Exit codes are checked
-      explicitly at every call site, so nothing is lost by not throwing here.
+      Docker writes ordinary progress to stderr. Under 'Stop', PowerShell turns
+      redirected native stderr into a terminating error, so `agent` fails as soon as a
+      caller pipes or redirects its output, as a script or CI job does. Every call site
+      checks the exit code, so nothing is lost by not throwing here.
     #>
     [CmdletBinding(PositionalBinding = $false)]
     param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Arguments)
@@ -48,10 +48,10 @@ function Write-AgentSessionRecord {
       Append one session record to the host-side log.
 
       Shared by both launchers so the path and shape are defined once. `agent` calls it
-      after a session ends and can report an outcome; the devcontainer path calls it from
-      initializeCommand, which runs on the host before the container starts, so it records
-      the start and leaves outcome fields null. There is no host-side hook for a
-      devcontainer ending.
+      after a session ends and can report an outcome. The devcontainer path calls it from
+      initializeCommand, which runs on the host before the container starts, so it
+      records the start and leaves the outcome fields null; there is no host-side hook
+      for a devcontainer ending.
     #>
     [CmdletBinding(PositionalBinding = $false)]
     param(
@@ -62,8 +62,8 @@ function Write-AgentSessionRecord {
     $dir = Split-Path -Parent $Global:VestibuleLog
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
 
-    # Assert the invariant rather than assume it. If a mount ever contains the log, the
-    # record is no longer independent of the session it describes.
+    # Assert the invariant rather than assume it: a mount containing the log leaves the
+    # record no longer independent of the session it describes.
     if ($MountedPath -and $Global:VestibuleLog.StartsWith($MountedPath, 'OrdinalIgnoreCase')) {
         Write-Warning "Session log is inside the mounted path. This session can edit its own record."
     }
@@ -78,9 +78,8 @@ function Get-GitWorkingState {
       Map of path -> two-letter git status code for a working tree.
 
       Sampled before and after a session so the record can report what that session
-      changed. `git status --short` read only afterwards answers a different question,
-      "what is dirty now", which counts files that were already modified before the
-      container started and attributes them to it.
+      changed. Reading `git status --short` only afterwards answers a different question,
+      "what is dirty now", and attributes edits made before the container started to it.
     #>
     [CmdletBinding(PositionalBinding = $false)]
     param([string] $Path)
@@ -96,11 +95,80 @@ function Get-GitWorkingState {
 }
 
 
+function Get-AgentScopeRefusal {
+    <#
+      Return a reason a directory is too broad to mount, or $null when it is fine.
+
+      Asked before the repo-parent heuristic below, and independently of it: the two
+      questions differ. "Does this directory contain repositories" can be answered only
+      by looking inside, and comes back clean for a home directory whose repositories sit
+      one level deeper, or that holds none at all. "Is this path my home directory" is
+      answerable from the path alone and never comes back clean by accident.
+
+      A pure function of its arguments, so verify.ps1 can assert every refusal against
+      synthetic paths without creating directories or changing the working directory.
+    #>
+    [CmdletBinding(PositionalBinding = $false)]
+    param(
+        [Parameter(Mandatory = $true)] [string] $Path,
+        [string] $HomePath = $HOME
+    )
+
+    # GetFullPath resolves . and .. and normalises separators; the trim collapses
+    # 'C:\Users\' and 'C:\Users' to one string. Comparisons are ordinal case-insensitive:
+    # Windows paths ignore case, and culture-aware casing would let a Turkish locale
+    # answer a security check differently.
+    $p = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $h = if ($HomePath) { [System.IO.Path]::GetFullPath($HomePath).TrimEnd('\') } else { '' }
+
+    $isAtOrUnder = {
+        param($child, $parent)
+        $child -ieq $parent -or
+        $child.StartsWith($parent + '\', [System.StringComparison]::OrdinalIgnoreCase)
+    }
+
+    # A drive root, or the root of a UNC share. 'C:' is what the trim leaves of 'C:\'.
+    if ($p -match '^[A-Za-z]:$' -or $p -match '^\\\\[^\\]+\\[^\\]+$') {
+        return "$Path is a drive root. Mounting it would hand over the whole drive."
+    }
+
+    if ($h) {
+        # Home itself, or anything above it: C:\Users\you, C:\Users, C:\. A containment
+        # test rather than a list of names, so it holds whatever the profile directory is
+        # called and wherever it has been relocated.
+        if (& $isAtOrUnder $h $p) {
+            return "$Path is your home directory, or above it. It holds .ssh, .aws and .claude."
+        }
+
+        # Credential and configuration stores: the directory itself and anything inside
+        # it, since mounting .ssh\keys is no better than mounting .ssh.
+        foreach ($name in '.ssh', '.aws', '.claude', '.gnupg', '.azure', '.kube', '.docker', '.config') {
+            if (& $isAtOrUnder $p (Join-Path $h $name)) {
+                return "$Path is inside $name, which holds credentials."
+            }
+        }
+
+        # Broad personal-data roots, the root only. Keeping a repository in Documents is
+        # ordinary, and Documents\my-project is as narrow as any path.
+        foreach ($name in 'Documents', 'Desktop', 'Downloads', 'OneDrive') {
+            if ($p -ieq (Join-Path $h $name)) {
+                return "$Path is a personal data root rather than a project."
+            }
+        }
+        # 'OneDrive - Contoso', as business tenants name the synced root.
+        if ($p -imatch ('^' + [regex]::Escape($h) + '\\OneDrive - [^\\]+$')) {
+            return "$Path is a personal data root rather than a project."
+        }
+    }
+
+    return $null
+}
+
+
 function agent {
-    # PositionalBinding = $false is required. With positional binding enabled,
-    # `agent claude` binds 'claude' to -Image, finds no such image, and rebuilds under
-    # that tag instead of running the agent. Disabled, unmatched arguments fall through
-    # to $Command.
+    # PositionalBinding = $false is required: with it enabled, `agent claude` binds
+    # 'claude' to -Image, finds no such image and rebuilds under that tag instead of
+    # running the agent. Disabled, unmatched arguments fall through to $Command.
     [CmdletBinding(PositionalBinding = $false)]
     param(
         # Mount a scratch volume at /work in place of the current directory, and
@@ -111,18 +179,17 @@ function agent {
         [switch] $Force,       # override the contains-repositories guard below
         [switch] $SkipVerify,  # skip the post-build check; see the build step below
 
-        # Apply the egress allowlist. Without it the available postures are unrestricted
-        # egress or none at all, and none at all prevents a hosted agent from reaching
-        # its API.
+        # Apply the egress allowlist. Without it the postures are unrestricted egress
+        # or none at all, and none at all stops a hosted agent reaching its API.
         #
-        # Costs four capabilities, and only during startup: NET_ADMIN and NET_RAW for
+        # Costs four capabilities, during startup only: NET_ADMIN and NET_RAW for
         # iptables, SETUID and SETGID for the handover to `dev`. no-new-privileges is
         # retained, so the session cannot climb back afterwards. Running the script
         # under sudo instead would mean dropping no-new-privileges for the whole
-        # session, leaving a permanent escalation path.
+        # session, a permanent escalation path.
         #
         # The intended replacement is a forward proxy the container has no route
-        # around, which requires no capabilities. See BACKLOG.md, item 8.
+        # around, which needs no capabilities. See BACKLOG.md, item 9.
         [switch] $Firewall,
 
         # docker --build-arg. Mainly HARNESSES, which agent CLIs the image contains:
@@ -152,13 +219,13 @@ function agent {
     $ErrorActionPreference = 'Stop'
 
     # Reject a mistyped flag rather than treat it as a command. With positional binding
-    # disabled, an unrecognised argument falls through to $Command and is used as the
-    # executable, so `agent -NoNetworl` starts a container under the default posture and
-    # fails afterwards inside docker. A flag that selects a security posture must not
-    # fail by silently applying a different one.
+    # disabled, an unrecognised argument falls through to $Command as the executable, so
+    # `agent -NoNetworl` starts a container under the default posture and fails later
+    # inside docker. A flag that selects a security posture must not fail by silently
+    # applying a different one.
     #
-    # First position only: an executable name never begins with '-', while flags intended
-    # for the harness legitimately do, as in `agent claude --resume`.
+    # First position only: an executable name never begins with '-', while flags for the
+    # harness legitimately do, as in `agent claude --resume`.
     if ($Command -and $Command[0].StartsWith('-')) {
         $switches = $MyInvocation.MyCommand.Parameters.GetEnumerator() |
                     Where-Object { $_.Key -ne 'Command' -and
@@ -182,6 +249,22 @@ function agent {
     # Docker volume names allow [a-zA-Z0-9_.-] only; fold anything else.
     $project = (Split-Path -Leaf $PWD.Path) -replace '[^a-zA-Z0-9_.-]', '-'
     $homeVol = "agent-home-$project"
+
+    # Refuse a directory that is too broad to hand over at all. Asked before the .git
+    # test below rather than inside it: a stray `git init` in a home directory must not
+    # make it mountable. Isolated sessions are exempt; they mount nothing from this
+    # machine.
+    #
+    # No -Force override. -Isolated and cd into a single project both remain, so nothing
+    # legitimate is blocked, and README.md claims the dangerous mount cannot be
+    # constructed rather than that it is discouraged.
+    if (-not $Isolated) {
+        $refusal = Get-AgentScopeRefusal -Path $PWD.Path
+        if ($refusal) {
+            throw ("$refusal`n" +
+                   "Nothing was started. cd into one project, or -Isolated for a scratch volume.")
+        }
+    }
 
     # Refuse a directory that contains repositories rather than being one: running from
     # ~/repos would mount every project it holds. Isolated sessions are exempt.
@@ -209,9 +292,9 @@ function agent {
         if ($LASTEXITCODE -ne 0) { throw "Image build failed; not starting a container." }
 
         # The posture is assembled from strings, so nothing validates it before it is
-        # sent. verify.ps1 inspects the resulting container instead, which is what
+        # sent; verify.ps1 inspects the resulting container instead, which is what
         # separates a documented control from one that silently does nothing. Run after
-        # a build, where the subject of the checks has changed, rather than before every
+        # a build, where the subject of the checks has changed, not before every
         # session. Roughly 19 seconds.
         if (-not $SkipVerify) {
             & (Join-Path $Global:VestibuleRoot 'verify.ps1') -Image $Image
@@ -225,10 +308,10 @@ function agent {
     # Its error names the symptom rather than the cause, which makes it hard to place.
     $tty = if ([Console]::IsInputRedirected) { '-i' } else { '-it' }
 
-    # No mounts in this array. Every -v is assembled in a single block below, so the
-    # mount list can be read in one place. Mounts declared here applied to every posture,
-    # including ones they were never reviewed against: -Isolated previously received a
-    # home volume, a shared cache and a host bind by this route.
+    # No mounts in this array. Every -v is assembled in one block below, so the mount
+    # list reads in one place. Mounts declared here apply to every posture, including
+    # ones they were never reviewed against: -Isolated previously received a home volume,
+    # a shared cache and a host bind by this route.
     $dockerArgs = @(
         'run', $tty, '--rm',
         '--name', "agent-$project",
@@ -259,10 +342,10 @@ function agent {
     foreach ($e in $Env) { $dockerArgs += @('-e', $e) }
 
     # Per-project network. On Docker's default bridge every container can reach every
-    # other by IP; there is no name resolution, but an address is enough to scan a
-    # sibling, which defeats per-project isolation. A user-defined network removes that
-    # path and leaves outbound access unchanged. Reaching a service elsewhere is then a
-    # deliberate act:  docker network connect agent-net-<project> ollama
+    # other by IP: there is no name resolution, but an address is enough to scan a
+    # sibling and defeat per-project isolation. A user-defined network removes that path
+    # and leaves outbound access unchanged. Reaching a service elsewhere is then
+    # deliberate:  docker network connect agent-net-<project> ollama
     if ($NoNetwork) {
         $dockerArgs += '--network=none'
     }
@@ -278,8 +361,8 @@ function agent {
 
     # ---- the mount list ---------------------------------------------------------
     # -Isolated mounts nothing from this machine: no project directory, and equally no
-    # login, transcripts or preferences. The consequence is a login per isolated session,
-    # in exchange for the container holding no credential to exfiltrate.
+    # login, transcripts or preferences. The cost is a login per isolated session; the
+    # gain is a container holding no credential to exfiltrate.
     $dockerArgs += @('-w', '/work')
 
     if ($Isolated) {
@@ -310,9 +393,9 @@ function agent {
     }
 
     # The mount list is the security policy, so report all of it, derived from the
-    # arguments being passed. A readout restated by each branch drifts from the command
-    # it describes: the -Isolated line previously reported that nothing was mounted while
-    # a bind declared elsewhere still applied.
+    # arguments actually passed. A readout restated by each branch drifts from the
+    # command it describes: the -Isolated line once reported nothing mounted while a bind
+    # declared elsewhere still applied.
     #
     # A spec is source:dest[:mode]. Splitting on ':' is wrong on Windows, where the
     # source carries a drive letter, so anchor the destination as an absolute Unix path.
@@ -344,10 +427,10 @@ function agent {
     if ($Firewall) {
         Write-Host "egress    allowlist (NET_ADMIN granted back)" -ForegroundColor Yellow
 
-        # init-firewall.sh skips a missing allowlist file silently and applies only its
-        # five built-in domains. github.com is not among them, and because the rules DROP
-        # rather than REJECT, git hangs with no indication of the cause. Warn here, where
-        # the host can still determine whether the file exists.
+        # init-firewall.sh skips a missing allowlist silently and applies only its five
+        # built-in domains. github.com is not among them, and because the rules DROP
+        # rather than REJECT, git hangs with no sign of the cause. Warn here, where the
+        # host can still see whether the file exists.
         if ($Isolated) {
             Write-Warning ("Isolated: your project's .vestibule/allowed-domains.txt is not mounted. " +
                            "Only the built-in domains apply unless the scratch volume holds its own " +
@@ -398,11 +481,11 @@ function agent {
     Invoke-Docker @dockerArgs
     $exit = $LASTEXITCODE
 
-    # Docker exits 125 when the daemon declined to create the container: a name collision
-    # with a session already running, an unusable flag, a missing image. Nothing ran, so
-    # there is no outcome to describe. The row is still written, since a failed launch is
-    # worth recording, but fields that would otherwise describe a session that never
-    # existed are left null rather than zero: unknown, not clean.
+    # Docker exits 125 when the daemon declined to create the container: a name
+    # collision with a running session, an unusable flag, a missing image. Nothing ran,
+    # so there is no outcome to describe. The row is still written, a failed launch being
+    # worth recording, but fields that would describe a session that never existed are
+    # left null rather than zero: unknown, not clean.
     $launched = ($exit -ne 125)
 
     # ---- what this session changed in the working tree -------------------------
@@ -477,9 +560,9 @@ function Get-AgentSessions {
           Get-AgentSessions -Project x   one project
           Get-AgentSessions -Last 100
 
-      Shows how each session was configured and how it ended. It does not show what the
-      agent did inside; that would require process auditing, which requires capabilities
-      this design drops deliberately.
+      Shows how each session was configured and how it ended, not what the agent did
+      inside; that would require process auditing, which requires capabilities this
+      design deliberately drops.
     #>
     [CmdletBinding(PositionalBinding = $false)]
     param(
