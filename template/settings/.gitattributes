@@ -1,0 +1,8 @@
+# Line endings here are correctness, not style. A CRLF shebang makes the kernel look for
+# an interpreter named `bash\r`, so a hook exits 127 instead of 2 -- and a PreToolUse hook
+# that does not exit 2 does not block. Commit this file: untracked, it governs only the
+# working tree it sits in, and a clone on a machine with core.autocrlf=true undoes it.
+*.sh    text eol=lf
+*.conf  text eol=lf
+*.md    text eol=lf
+*       text=auto

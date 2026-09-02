@@ -211,6 +211,14 @@ function agent {
         [string] $Image      = 'vestibule:1',
         [string] $ContextDir = (Join-Path $Global:VestibuleRoot 'image'),
 
+        # Agent configuration carried into the session read-only; the layout and the
+        # harness-namespace rule are in README.md. Defaults to $env:VESTIBULE_SETTINGS.
+        #
+        # The mapping lives in the table below rather than in a manifest inside the
+        # settings directory: that directory is mounted into the session, so a manifest
+        # there would let an agent extend its own mount list.
+        [string] $Settings,
+
         # Command to run instead of bash, flags included: `agent claude --resume`
         [Parameter(ValueFromRemainingArguments = $true)]
         [string[]] $Command
@@ -263,6 +271,25 @@ function agent {
         if ($refusal) {
             throw ("$refusal`n" +
                    "Nothing was started. cd into one project, or -Isolated for a scratch volume.")
+        }
+    }
+
+    # Checked here rather than at the mount, so a wrong path stops the launch: Docker
+    # creates an empty directory for a missing bind source, which looks like success.
+    # The scope refusal applies too -- this lands in the home directory the agent reads.
+    $settingsRoot = $null
+    if (-not $Isolated) {
+        $s = if ($Settings) { $Settings } else { $env:VESTIBULE_SETTINGS }
+        if ($s) {
+            if (-not (Test-Path -PathType Container $s)) {
+                throw "Settings directory not found: $s`nNothing was started."
+            }
+            $settingsRoot = (Resolve-Path -LiteralPath $s).Path
+            $sRefusal = Get-AgentScopeRefusal -Path $settingsRoot
+            if ($sRefusal) {
+                throw ("Settings: $sRefusal`n" +
+                       "Nothing was started. Point it at a settings repository.")
+            }
         }
     }
 
@@ -379,14 +406,50 @@ function agent {
         # boundaries, which is why isolated sessions do not receive it.
         $dockerArgs += @('-v', 'uv-cache:/home/dev/.cache/uv')
 
-        # The global CLAUDE.md only: preferences, not secrets. Never the whole
-        # ~/.claude, which holds the host credential and every past project's
-        # transcripts. $HOME rather than USERPROFILE is portable. Test-Path is
-        # required because Docker silently creates an empty directory when a bind
-        # source does not exist.
-        $globalMd = Join-Path $HOME '.claude\CLAUDE.md'
-        if (Test-Path -PathType Leaf $globalMd) {
-            $dockerArgs += @('-v', "${globalMd}:/home/dev/.claude/CLAUDE.md:ro")
+        # Individual paths, never the whole ~/.claude, which holds the host credential
+        # and every past project's transcripts.
+        if ($settingsRoot) {
+            $carried = 0
+            foreach ($m in @(
+                @('claude\CLAUDE.md', '/home/dev/.claude/CLAUDE.md'),
+                @('claude\commands',  '/home/dev/.claude/commands'),
+                @('claude\skills',    '/home/dev/.claude/skills'),
+                @('claude\hooks',     '/home/dev/.claude/hooks'),
+                @('tmux.conf',        '/home/dev/.tmux.conf')
+            )) {
+                $src = Join-Path $settingsRoot $m[0]
+                if (Test-Path -LiteralPath $src) {
+                    $dockerArgs += @('-v', "${src}:$($m[1]):ro")
+                    $carried++
+                }
+            }
+            if ($carried -eq 0) {
+                Write-Warning ("$settingsRoot holds none of the paths agent looks for, so " +
+                               "nothing was carried in. Expected claude\CLAUDE.md, " +
+                               "claude\commands, claude\skills, claude\hooks or tmux.conf.")
+            }
+        }
+        else {
+            # No settings directory: fall back to the host's own global CLAUDE.md.
+            # Preferences, not secrets. $HOME rather than USERPROFILE is portable.
+            $globalMd = Join-Path $HOME '.claude\CLAUDE.md'
+            if (Test-Path -PathType Leaf $globalMd) {
+                $dockerArgs += @('-v', "${globalMd}:/home/dev/.claude/CLAUDE.md:ro")
+            }
+        }
+
+        # Mounting settings read-only is this launcher's choice, so somewhere a session
+        # can still write about them is its obligation. Under ~/.vestibule rather than
+        # ~/.claude: the need comes from this launcher, not from any harness, so it stays
+        # put whichever harness is running. Host-side beside sessions.jsonl, for the same
+        # reason that file is there. Gated on -Settings so the default mount list is
+        # unchanged for anyone not using one.
+        if ($settingsRoot) {
+            $outbox = Join-Path $env:LOCALAPPDATA 'vestibule\outbox'
+            if (-not (Test-Path -PathType Container $outbox)) {
+                New-Item -ItemType Directory -Path $outbox -Force | Out-Null
+            }
+            $dockerArgs += @('-v', "${outbox}:/home/dev/.vestibule/outbox")
         }
 
         Write-Host "MOUNTED   your project directory is live and writable" -ForegroundColor Yellow
@@ -440,6 +503,24 @@ function agent {
             Write-Warning ("No .vestibule\allowed-domains.txt here, so only the 5 built-in domains " +
                            "apply. github.com is not one of them and git will hang. Start one with:`n" +
                            "  copy `"$(Join-Path $Global:VestibuleRoot 'template\allowed-domains.txt')`" .vestibule\")
+        }
+    }
+
+    # Mounting hooks does not run them: a hook fires only when ~/.claude/settings.json
+    # declares it, and that file is on the project's home volume rather than in the
+    # settings directory, so this cannot check whether it is wired -- only that there is
+    # something to wire. Hence "if you have not", which costs one redundant line per
+    # session for anyone already set up. The alternative is a hook that is present,
+    # executable and never invoked, which is the failure this whole file exists to catch.
+    if ($settingsRoot) {
+        $hookDir = Join-Path $settingsRoot 'claude\hooks'
+        if ((Test-Path -PathType Container $hookDir) -and
+            (Get-ChildItem -Path $hookDir -File -ErrorAction SilentlyContinue)) {
+            Write-Warning ("claude\hooks is mounted, but a hook runs only when " +
+                           "~/.claude/settings.json declares it, and that file lives on this " +
+                           "project's home volume. If you have not wired it for this project, " +
+                           "nothing is running them. Block to merge:`n" +
+                           "  $(Join-Path $Global:VestibuleRoot 'template\settings\claude\settings.json.example')")
         }
     }
     if ($Env) {
@@ -521,6 +602,7 @@ function agent {
         image      = $imageId
         network    = if ($NoNetwork) { 'none' } else { $net }
         firewall   = [bool]$Firewall
+        settings   = $settingsRoot
         # Where-Object first: piping an empty $Env into ForEach-Object still iterates
         # once in PowerShell 5.1, which recorded [""] rather than [].
         envNames   = @($Env | Where-Object { $_ } | ForEach-Object { ($_ -split '=', 2)[0] })

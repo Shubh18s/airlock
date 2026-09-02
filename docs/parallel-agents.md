@@ -46,4 +46,4 @@ docker run -d --name agent-myproject ... vestibule:1 sleep infinity
 docker exec -it agent-myproject tmux new-session -A -s main
 ```
 
-A `-Detach` switch is [backlog item 9](../BACKLOG.md).
+A `-Detach` switch is [backlog item 10](../BACKLOG.md).

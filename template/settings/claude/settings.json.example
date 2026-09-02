@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "NOT mounted by -Settings. Claude Code reads ~/.claude/settings.json, which lives on",
+    "the per-project home volume and also holds your model and theme, so the launcher",
+    "cannot safely own it. Merge the hooks block below in by hand, once per project.",
+    "",
+    "Until you do, a hook in claude/hooks/ is mounted, executable and never invoked.",
+    "Confirm it is actually gating:",
+    "  echo '{\"tool_input\":{\"command\":\"git commit -m probe\"}}' | ~/.claude/hooks/<hook>.sh; echo $?",
+    "Exit 2 means it blocks. Anything else means it does not, whatever the file looks like."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/commit-gate.sh" }
+        ]
+      }
+    ]
+  }
+}
