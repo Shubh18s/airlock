@@ -124,12 +124,17 @@ cd vestibule
 ```
 
 Builds the image, verifies it, and adds one line to your PowerShell profile. Open a new
-shell, then authenticate once inside a container:
+shell, `cd` into a project, and authenticate inside the container:
 
 ```powershell
-agent -Isolated
-# inside:  claude   then /login
+agent claude
+# inside:  /login
 ```
+
+Once per project, not once per machine. The credential lives on that project's home
+volume, which is what keeps one project's session out of another's transcripts. An
+`-Isolated` session mounts no home volume at all, so it holds no credential to
+exfiltrate and logs in every time.
 
 `verify.ps1` runs after every build, takes about nineteen seconds, and blocks the
 session on failure. Run it by hand with `.\verify.ps1`, or pass `agent -SkipVerify` to
@@ -160,6 +165,7 @@ Scope comes from the working directory. There is nothing to configure per projec
 | `-NoNetwork` | `--network=none` | The agent cannot reach its own API, so no login and no Claude. See the combinations below |
 | `-Firewall` | Egress allowlist, from the 5 built-in domains plus `.vestibule/allowed-domains.txt` in your project | Grants four capabilities during startup only. Blocked requests hang rather than fail |
 | `-Env NAME=VALUE` | Passes variables that die with the container | The session can read them. Use short-lived, narrowly scoped values |
+| `-Settings <path>` | Carries your agent configuration in read-only: `claude\CLAUDE.md`, `claude\commands\`, `claude\skills\`, `claude\hooks\`, `tmux.conf`. Defaults to `$env:VESTIBULE_SETTINGS` | Read-only, so a session cannot record a change to its own settings. It proposes one in the outbox instead |
 | `-Force` | Overrides the repo-parent guard below. It does not override the scope refusal | |
 | `-MemoryGb`, `-Cpus` | Default 8 and 4. Per container, not a total | |
 | `-Build`, `-BuildArg` | Rebuild the image, then verify it | Minutes |
@@ -168,6 +174,49 @@ Scope comes from the working directory. There is nothing to configure per projec
 
 **Pick one network posture.** No flag is all of the internet, `-Firewall` is the
 allowlist, `-NoNetwork` is nothing.
+
+### Bringing your own agent settings
+
+Start from the skeleton rather than building the tree by hand:
+
+```powershell
+copy -Recurse "<vestibule>\template\settings" "$HOME\repos\my-agent-settings"
+$env:VESTIBULE_SETTINGS = "$HOME\repos\my-agent-settings"
+```
+
+`-Settings <path>` mounts a directory of agent configuration into the session, read-only:
+
+```
+<settings>\claude\CLAUDE.md   ->  ~/.claude/CLAUDE.md
+<settings>\claude\commands\   ->  ~/.claude/commands/
+<settings>\claude\skills\     ->  ~/.claude/skills/
+<settings>\claude\hooks\      ->  ~/.claude/hooks/
+<settings>\tmux.conf          ->  ~/.tmux.conf
+```
+
+Every entry is optional; whatever exists is mounted. Set `$env:VESTIBULE_SETTINGS` once
+rather than passing the flag each time.
+
+**A subdirectory is one harness's configuration; the root is what they all share.**
+`claude\` is Claude Code's. `tmux.conf` sits at the root because a multiplexer is not a
+harness setting. Only `claude\` is implemented today -- another harness means adding its
+mapping to `agent.ps1`, which is a launcher change you can review, rather than a manifest
+inside the settings directory. That directory is mounted into the session, so a manifest
+there would let an agent extend its own mount list.
+
+**Read-only, because these are instructions and executable hooks that apply to every
+future session.** A session able to edit them is a session able to rewrite the hook that
+gates its own commits. To change them, run `agent` from inside the settings repository,
+where it is the project at `/work` and writable like anything else.
+
+That leaves one gap: a correction learned while working on some *other* project has
+nowhere to go. `~/.vestibule/outbox` is mounted read-write for exactly that, so a session
+can propose an amendment to its own settings without being able to make one take effect.
+
+**Hooks are mounted, not wired.** A hook runs only when `~/.claude/settings.json` declares
+it as a `PreToolUse` matcher, and that file lives on the per-project home volume rather
+than in your settings directory. Until you add the block yourself, a mounted hook is
+present, executable and never invoked.
 
 ### Combining them
 
@@ -279,7 +328,9 @@ blocked.
 | `verify.ps1` | Checks the built container against what is claimed. Runs after every build |
 | `record-session.ps1` | Host-side session recorder, called by the devcontainer path |
 | `template/` | Copied into a project as `.devcontainer/` |
+| `template/settings/` | Skeleton for `-Settings`: layout, a stub `CLAUDE.md`, `.gitattributes`, and the `settings.json` hooks block |
 | `docs/design.md` | Threat model, the four properties, known limits |
+| `docs/mounts.md` | Every mount, its mode, and where a write actually ends up |
 
 ## Volumes
 
@@ -288,12 +339,37 @@ blocked.
 | `/work` | bind | per project | Your actual files, live on disk |
 | `/home/dev` | `agent-home-<project>` | per project | Login, session history, tmux config |
 | `/home/dev/.cache/uv` | `uv-cache` | shared | Downloaded wheels -- public artifacts only |
+| `~/.claude/CLAUDE.md`, `commands/`, `skills/`, `hooks/`, `~/.tmux.conf` | bind, **read-only** | `-Settings` only | Your agent configuration, carried in unchanged |
+| `~/.vestibule/outbox` | bind | `-Settings` only | The one writable exception: changes a session proposes to its own settings, landing host-side in `%LOCALAPPDATA%\vestibule\outbox`. Under `~/.vestibule` rather than `~/.claude`, because the need comes from this launcher rather than from any harness |
+
+A subdirectory under `-Settings` is one harness's configuration and the root is what all
+of them share, so `claude\` is Claude Code and `tmux.conf` is at the root because a
+multiplexer is not a harness setting. **Only `claude\` is implemented today.** Supporting
+another harness means adding its mapping to `agent.ps1`, which is a launcher change you
+can review, rather than a manifest inside the settings directory -- that directory is
+mounted into the session, so a manifest there would let an agent extend its own mount
+list.
+
+Settings are read-only because they are instructions and executable hooks that apply to
+every future session: a session able to edit them is a session able to rewrite the hook
+that gates its own commits. To change them, run `agent` from inside the settings
+repository, where it is the project at `/work` and writable like anything else.
+
+Without `-Settings`, the host's own `~/.claude/CLAUDE.md` is mounted read-only as before,
+and no outbox is created. The default mount list is unchanged.
 
 Per-project home volumes cost one login per repository. A single shared volume is a
 one-line change if you prefer the convenience, but it rebuilds inside the sandbox the
 same credential pile the design avoids outside it.
 
 ## Notes
+
+**Python environments land on the home volume, not your project.** The image sets
+`UV_PROJECT_ENVIRONMENT=/home/dev/.venv`, so `uv sync` inside a session does not write a
+`.venv` into your bind-mounted project. Without it a Linux virtualenv lands on your host,
+where its binaries are the wrong platform and it can overwrite an environment you already
+had there. Do not override it.
+
 
 **Multi-repo sessions.** The mount list is the scope declaration. Add one bind per repo
 the task needs, and mount reference-only repos `readonly`.

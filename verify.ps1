@@ -157,6 +157,28 @@ Test-Item "firewall: non-allowlisted address blocked" {
 # -CommandType Function is required: run from the repo directory, a bare
 # `Get-Command agent` resolves to agent.ps1 itself as an ExternalScript and the check
 # passes whether or not the profile was ever wired.
+# A PreToolUse hook blocks on exit 2 and ONLY on exit 2; every other code is treated as an
+# error and the tool call proceeds. CRLF line endings make the kernel look for an
+# interpreter named `bash\r`, so the hook exits 127 and silently stops gating while still
+# looking installed. That has happened here once already.
+#
+# A byte check rather than `bash -n`, which PASSES a CRLF script. Verified 2026-09-02.
+# Checks the real hooks in your settings directory, not a synthetic one, so it catches the
+# failure that actually occurs. Skipped when no settings directory is configured.
+$settingsDir = $env:VESTIBULE_SETTINGS
+if ($settingsDir -and (Test-Path -PathType Container (Join-Path $settingsDir 'claude\hooks'))) {
+    $hooks = Get-ChildItem -Path (Join-Path $settingsDir 'claude\hooks') -Filter *.sh -File
+    foreach ($h in $hooks) {
+        Test-Item "hook has LF endings: $($h.Name)" {
+            $bytes = [System.IO.File]::ReadAllBytes($h.FullName)
+            -not ($bytes -contains 13)
+        } "$($h.Name) contains CR bytes. The kernel will look for `bash\r`, the hook will exit 127 instead of 2, and a PreToolUse hook that does not exit 2 does not block."
+    }
+    if (-not $hooks) {
+        Write-Host "  (no hook scripts in $settingsDir\claude\hooks)" -ForegroundColor DarkGray
+    }
+}
+
 Test-Item "'agent' command is loaded" {
     [bool](Get-Command agent -CommandType Function -ErrorAction SilentlyContinue)
 } "Run .\install.ps1, then open a new shell (or: . `$PROFILE)."

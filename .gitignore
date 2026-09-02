@@ -11,3 +11,9 @@ personal/
 # Session records used to live here. They now live in %LOCALAPPDATA%\vestibule, because
 # a log inside the repo is editable by any session run from the repo -- which defeats the
 # only reason to keep one.
+
+# Worktrees, created inside the repo so a prepared branch lands on the host disk and
+# survives the container. Ignored because an un-ignored .worktrees/ fills `git status`
+# with a duplicate of the whole tree; the commits are in .git either way, so the checkout
+# is disposable.
+.worktrees/

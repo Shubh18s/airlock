@@ -207,7 +207,7 @@ Three reasons it slows an exfiltration attempt rather than stopping one:
 
 Proper enforcement needs a forward proxy doing SNI or Host filtering, with the container
 given no direct route. That is the intended direction for this property, and
-[backlog item 8](../BACKLOG.md).
+[backlog item 9](../BACKLOG.md).
 
 Two behaviours when it is on. **IPv6 is denied outright, not filtered** -- the allowlist
 is IPv4-only, so rather than leave a second address family unpoliced the script sets an
@@ -253,7 +253,7 @@ Nothing that reads the source catches that; a check that opens a socket does.
 
 It covers the failure modes found so far and nothing else. That list is short because the
 project is young, not because it is finished. The structural version of this argument is
-[backlog item 1](../BACKLOG.md).
+[backlog item 2](../BACKLOG.md).
 
 ## Where this sits
 
