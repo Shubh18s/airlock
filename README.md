@@ -11,6 +11,8 @@ vestibule is a small launcher that runs them in a container instead. One project
 nothing else. The agent logs in to Claude as itself rather than as you, so a bad session
 cannot replay your identity anywhere.
 
+[I Never Walked Away From My Agent. That Was the Problem.](https://medium.com/@singh18shubhdeep/i-never-walked-away-from-my-agent-that-was-the-problem-3ff2194a3960)
+
 ```powershell
 cd ~\repos\my-project
 agent
