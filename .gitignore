@@ -17,3 +17,10 @@ personal/
 # with a duplicate of the whole tree; the commits are in .git either way, so the checkout
 # is disposable.
 .worktrees/
+
+# Per-project vestibule config -- the egress allowlist. `agent` creates it in whatever
+# repo it is run from, and this repo is no exception
+.vestibule/
+
+# Personal rather than project convention.
+CLAUDE.md
